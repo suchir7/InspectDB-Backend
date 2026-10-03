@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  InspectDB - start/stop schedule for an existing Amazon DocumentDB cluster (EventBridge Scheduler).
+  While the cluster is stopped you pay only for storage. Delete this stack to remove the schedule.
+
+Parameters:
+  ClusterIdentifier:
+    Type: String
+    Default: inspectdb
+    Description: Identifier of the existing DocumentDB cluster.
+  StartSchedule:
+    Type: String
+    Default: cron(0 9 ? * MON-FRI *)
+    Description: When to start the cluster (default weekdays 9 AM).
+  StopSchedule:
+    Type: String
+    Default: cron(0 21 ? * MON-FRI *)
+    Description: When to stop the cluster (default weekdays 9 PM).
+  ScheduleTimezone:
+    Type: String
+    Default: Asia/Kolkata
+    Description: IANA time zone for the schedule expressions.
+
+Resources:
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: start-stop-docdb-cluster
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # DocumentDB management actions use the rds: IAM prefix
+              - Effect: Allow
+                Action: [rds:StartDBCluster, rds:StopDBCluster]
+                Resource: !Sub "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${ClusterIdentifier}"
+
+  StartClusterSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: !Sub "Start DocumentDB cluster ${ClusterIdentifier}"
+      ScheduleExpression: !Ref StartSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:docdb:startDBCluster
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: !Sub '{"DbClusterIdentifier": "${ClusterIdentifier}"}'
+        RetryPolicy: { MaximumRetryAttempts: 3 }
+
+  StopClusterSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: !Sub "Stop DocumentDB cluster ${ClusterIdentifier}"
+      ScheduleExpression: !Ref StopSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:docdb:stopDBCluster
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: !Sub '{"DbClusterIdentifier": "${ClusterIdentifier}"}'
+        RetryPolicy: { MaximumRetryAttempts: 3 }
+
+Outputs:
+  StartScheduleName:
+    Value: !Ref StartClusterSchedule
+  StopScheduleName:
+    Value: !Ref StopClusterSchedule

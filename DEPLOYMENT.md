@@ -7,7 +7,7 @@ InspectDB runs on free or credit-covered services. Amazon DocumentDB is the only
 ```text
 Browser ──HTTPS──▶ Vercel (free Hobby plan)               ← InspectDB-Frontend repo, auto-deploys on push
                      ├── React static build (global CDN)
-                     └── /api/*  ──HTTPS proxy──▶ EC2 t4g.micro, Mumbai (Elastic IP)   ← this repo, GitHub Actions deploy
+                     └── /api/*  ──HTTPS proxy──▶ EC2 API server (Elastic IP)   ← this repo, GitHub Actions deploy
                                                    ├── caddy:   HTTPS (Let's Encrypt via sslip.io)
                                                    └── backend: FastAPI
                                                          ├──TLS:27017──▶ Amazon DocumentDB 5.0 (private, same VPC)
@@ -15,21 +15,46 @@ Browser ──HTTPS──▶ Vercel (free Hobby plan)               ← InspectD
                                                          └─────────────▶ Google Gemini API (optional)
 ```
 
-**Why the API is on EC2:** DocumentDB has no public endpoint. It only accepts connections from inside its own VPC, so the API must run on a server in that VPC. Free hosts like Render or Vercel can't reach it. The EC2 server is the smallest ARM instance, paid from AWS credits.
+**Why the API is on EC2:** DocumentDB has no public endpoint. It only accepts connections from inside its own VPC, so the API must run on a server in that VPC. Free hosts like Render or Vercel can't reach it. The EC2 server is a micro instance, paid from AWS credits.
 
-## Cost (ap-south-1 Mumbai, approximate)
+## Current live deployment
+
+The live deployment reuses a DocumentDB cluster and server that were created in the AWS console, rather than the full CloudFormation stack described below.
+
+| Item | Value |
+|---|---|
+| Region | `us-east-1` (N. Virginia) |
+| DocumentDB | cluster `inspectdb`, engine 5.0, 1 × `db.t3.medium`, admin user `dbadmin` |
+| API server | EC2 `inspectdb-backend` (`t3.micro`, Amazon Linux 2023), Elastic IP `34.206.218.109` |
+| API URL | `https://34-206-218-109.sslip.io/api` (health: `/api/health`, docs: `/api/docs`) |
+| Running schedule | stack `inspectdb-docdb-schedule` ([`deploy/docdb-schedule.yaml`](deploy/docdb-schedule.yaml)): start 9:00, stop 21:00, Mon–Fri, Asia/Kolkata |
+| Deploys | GitHub Actions on every push to `main` (secrets `EC2_HOST`, `EC2_SSH_KEY`, `ENV_PRODUCTION`) |
+
+## Cost (approximate)
 
 | Resource | Monthly cost |
 |---|---|
 | DocumentDB `db.t3.medium`, weekdays 9 AM–9 PM IST only (~264 h) | ~$21 (first 30 days free on the AWS Paid plan) |
 | DocumentDB storage and I/O (small project) | < $1 |
-| EC2 `t4g.micro` + 10 GB disk | ~$6–7 |
+| EC2 `t3.micro` (or `t4g.micro` with the full template) + disk | ~$6–8 |
 | Elastic IP (public IPv4) | ~$3.65 |
 | Vercel, GitHub Actions (public repo), Neon free tier, EventBridge Scheduler | $0 |
 
 DocumentDB is only available on the AWS **Paid plan**. The Free plan doesn't include it. Credits are still applied first after upgrading.
 
 ## Deployment steps
+
+The steps below create everything from scratch with [`deploy/cloudformation.yaml`](deploy/cloudformation.yaml).
+
+To **reuse an existing DocumentDB cluster** (as the live deployment does), skip step 1 and do the following instead:
+- Allow port 27017 to the cluster from the API server's security group.
+- Open ports 80, 443 and 22 on the API server.
+- Attach an Elastic IP to the API server.
+- Add the start/stop schedule:
+
+```bash
+aws cloudformation deploy --region <region> --stack-name inspectdb-docdb-schedule   --template-file deploy/docdb-schedule.yaml --capabilities CAPABILITY_IAM   --parameter-overrides ClusterIdentifier=<cluster-id>
+```
 
 ### 1. Create the AWS resources (CloudFormation)
 
