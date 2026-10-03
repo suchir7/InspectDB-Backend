@@ -1,0 +1,39 @@
+# Production API stack on the EC2 server: FastAPI backend + Caddy (HTTPS reverse proxy).
+# Deployed by .github/workflows/deploy.yml; manual run:  docker compose --env-file .env.production up -d --build
+name: inspectdb
+
+services:
+  backend:
+    build: .
+    env_file: .env.production
+    environment:
+      ENVIRONMENT: production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # Persists Let's Encrypt certificates across deploys
+  caddy_data:
+  caddy_config:

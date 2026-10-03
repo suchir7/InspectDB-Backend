@@ -1,0 +1,25 @@
+# Secrets: never commit these
+.env
+.env.*
+!.env.example
+!.env.production.example
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

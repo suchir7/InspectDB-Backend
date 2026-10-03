@@ -1,0 +1,14 @@
+# SITE_ADDRESS comes from .env.production:
+#   ":80"                    -> plain HTTP on the server's IP (default)
+#   "3-91-20-15.sslip.io"    -> free hostname for your Elastic IP, with automatic Let's Encrypt HTTPS
+#   "api.example.com"        -> your own domain (point an A record at the server IP first)
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+	reverse_proxy backend:8000
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

@@ -1,0 +1,74 @@
+name: Test and deploy API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run tests
+        env:
+          # Gemini calls are mocked in tests; DATABASE_URL empty -> local SQLite
+          GEMINI_API_KEY: ci-placeholder-key
+          DATABASE_URL: ""
+        run: python -m pytest tests/ -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+    steps:
+      - name: Check deployment secrets
+        id: config
+        run: |
+          if [ -z "$EC2_HOST" ]; then
+            echo "::notice::EC2_HOST secret is not set; skipping deployment."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+
+      - name: Prepare SSH key
+        if: steps.config.outputs.ready == 'true'
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -T 15 -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Package release
+        if: steps.config.outputs.ready == 'true'
+        env:
+          ENV_PRODUCTION: ${{ secrets.ENV_PRODUCTION }}
+        run: |
+          printf '%s\n' "$ENV_PRODUCTION" > .env.production
+          tar -czf /tmp/inspectdb-release.tar.gz --exclude=.git --exclude=.github .
+          rm .env.production
+
+      - name: Upload and deploy
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          scp -i ~/.ssh/ec2.pem /tmp/inspectdb-release.tar.gz deploy/remote-setup.sh "ec2-user@$EC2_HOST:/tmp/"
+          ssh -i ~/.ssh/ec2.pem -o ServerAliveInterval=30 "ec2-user@$EC2_HOST" 'bash -s' < deploy/remote-deploy.sh

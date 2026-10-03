@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  InspectDB - Amazon DocumentDB cluster (1 instance) plus a small EC2 API server that runs the
+  Docker stack, with an optional start/stop schedule for DocumentDB. DocumentDB only accepts
+  connections from the API server's security group. Delete this stack to stop all charges.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Network }
+        Parameters: [VpcId, SubnetIds]
+      - Label: { default: App server }
+        Parameters: [KeyName, InstanceType, SSHLocation]
+      - Label: { default: Amazon DocumentDB }
+        Parameters: [DocDBUsername, DocDBPassword, DocDBInstanceClass]
+      - Label: { default: DocumentDB running schedule (cost saving) }
+        Parameters: [EnableDocDBSchedule, DocDBStartSchedule, DocDBStopSchedule, ScheduleTimezone]
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into. Use the default VPC.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Select at least 2 subnets of that VPC in different Availability Zones (in the default VPC
+      all subnets are public). The app server is placed in the first one.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair used to SSH into the app server.
+  InstanceType:
+    Type: String
+    Default: t4g.micro
+    AllowedValues: [t4g.micro, t4g.small, t3.micro, t3.small]
+    Description: API server size. t4g (ARM/Graviton) is the cheapest; 1 GB RAM is enough for the API (2 GB swap is added).
+  SSHLocation:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: Must be a CIDR such as 203.0.113.25/32
+    Description: >-
+      CIDR allowed to SSH (key-based login only). Keep 0.0.0.0/0 for GitHub Actions deployments,
+      whose runner IPs change on every run.
+  DocDBUsername:
+    Type: String
+    Default: inspectdbadmin
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]{0,62}'
+    ConstraintDescription: Must start with a letter; letters and digits only.
+  DocDBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 100
+    AllowedPattern: '[a-zA-Z0-9]+'
+    ConstraintDescription: 8-100 letters and digits only.
+    Description: DocumentDB master password (letters and digits only). Save it; you need it in .env.production.
+  DocDBInstanceClass:
+    Type: String
+    Default: db.t3.medium
+    AllowedValues: [db.t3.medium, db.t4g.medium]
+    Description: db.t3.medium is covered by the DocumentDB free trial for new DocumentDB users.
+  EnableDocDBSchedule:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Automatically start and stop DocumentDB on the schedule below (you pay only for storage while stopped).
+  DocDBStartSchedule:
+    Type: String
+    Default: cron(0 9 ? * MON-FRI *)
+    Description: EventBridge Scheduler expression for starting DocumentDB (default weekdays 9 AM).
+  DocDBStopSchedule:
+    Type: String
+    Default: cron(0 21 ? * MON-FRI *)
+    Description: EventBridge Scheduler expression for stopping DocumentDB (default weekdays 9 PM).
+  ScheduleTimezone:
+    Type: String
+    Default: Asia/Kolkata
+    Description: IANA time zone for the schedule expressions.
+  LatestAmiIdArm:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 ARM AMI, used for t4g instances (leave as is).
+  LatestAmiIdX86:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 x86 AMI, used for t3 instances (leave as is).
+
+Conditions:
+  IsArmInstance: !Or
+    - !Equals [!Ref InstanceType, t4g.micro]
+    - !Equals [!Ref InstanceType, t4g.small]
+  ScheduleEnabled: !Equals [!Ref EnableDocDBSchedule, "true"]
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: InspectDB app server - HTTP/HTTPS from anywhere, SSH from SSHLocation
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref SSHLocation }
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-app-sg" }
+
+  DocDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: InspectDB DocumentDB - port 27017 from the app server only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 27017
+          ToPort: 27017
+          SourceSecurityGroupId: !GetAtt AppSecurityGroup.GroupId
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-docdb-sg" }
+
+  DocDBSubnetGroup:
+    Type: AWS::DocDB::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: InspectDB DocumentDB subnets
+      SubnetIds: !Ref SubnetIds
+
+  DocDBCluster:
+    Type: AWS::DocDB::DBCluster
+    # A final snapshot is kept if the stack is deleted; delete it in the DocumentDB console when no longer needed.
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      EngineVersion: "5.0.0"
+      MasterUsername: !Ref DocDBUsername
+      MasterUserPassword: !Ref DocDBPassword
+      DBSubnetGroupName: !Ref DocDBSubnetGroup
+      VpcSecurityGroupIds: [!GetAtt DocDBSecurityGroup.GroupId]
+      StorageEncrypted: true
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-docdb" }
+
+  DocDBInstance:
+    Type: AWS::DocDB::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref DocDBCluster
+      DBInstanceClass: !Ref DocDBInstanceClass
+
+  AppServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !If [IsArmInstance, !Ref LatestAmiIdArm, !Ref LatestAmiIdX86]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroupIds: [!GetAtt AppSecurityGroup.GroupId]
+      MetadataOptions:
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 10
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-app" }
+
+  DocDBSchedulerRole:
+    Type: AWS::IAM::Role
+    Condition: ScheduleEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: start-stop-inspectdb-docdb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # DocumentDB management actions use the rds: IAM prefix
+              - Effect: Allow
+                Action: [rds:StartDBCluster, rds:StopDBCluster]
+                Resource: !Sub "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${DocDBCluster}"
+
+  DocDBStartScheduleRule:
+    Type: AWS::Scheduler::Schedule
+    Condition: ScheduleEnabled
+    Properties:
+      Description: Start the InspectDB DocumentDB cluster
+      ScheduleExpression: !Ref DocDBStartSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:docdb:startDBCluster
+        RoleArn: !GetAtt DocDBSchedulerRole.Arn
+        Input: !Sub '{"DbClusterIdentifier": "${DocDBCluster}"}'
+        RetryPolicy: { MaximumRetryAttempts: 3 }
+
+  DocDBStopScheduleRule:
+    Type: AWS::Scheduler::Schedule
+    Condition: ScheduleEnabled
+    Properties:
+      Description: Stop the InspectDB DocumentDB cluster
+      ScheduleExpression: !Ref DocDBStopSchedule
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:docdb:stopDBCluster
+        RoleArn: !GetAtt DocDBSchedulerRole.Arn
+        Input: !Sub '{"DbClusterIdentifier": "${DocDBCluster}"}'
+        RetryPolicy: { MaximumRetryAttempts: 3 }
+
+  AppElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref AppServer
+      Tags:
+        - { Key: Name, Value: !Sub "${AWS::StackName}-ip" }
+
+Outputs:
+  AppPublicIP:
+    Description: Elastic IP of the API server (GitHub secret EC2_HOST)
+    Value: !Ref AppElasticIP
+  ApiHealthURL:
+    Description: API health check over HTTP (works as soon as the API is deployed)
+    Value: !Sub "http://${AppElasticIP}/api/health"
+  HttpsSiteAddress:
+    Description: SITE_ADDRESS for .env.production (free automatic HTTPS); the frontend calls https://<this>/api
+    Value: !Join ["", [!Join ["-", !Split [".", !Ref AppElasticIP]], ".sslip.io"]]
+  SSHCommand:
+    Description: SSH into the app server
+    Value: !Sub "ssh -i ${KeyName}.pem ec2-user@${AppElasticIP}"
+  DocumentDBEndpoint:
+    Description: DocumentDB cluster endpoint (reachable only from inside the VPC)
+    Value: !GetAtt DocDBCluster.Endpoint
+  DocumentDBUri:
+    Description: Value for DOCUMENTDB_URI in .env.production
+    Value: !Sub "mongodb://${DocDBCluster.Endpoint}:${DocDBCluster.Port}/?tls=true&replicaSet=rs0&retryWrites=false"
