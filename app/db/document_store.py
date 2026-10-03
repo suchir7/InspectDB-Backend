@@ -1,9 +1,13 @@
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict
 
 from app.config.settings import settings
+
+# pymongo warns on every DocumentDB connection; compatibility is handled by this app
+warnings.filterwarnings("ignore", message="You appear to be connected to a DocumentDB cluster")
 
 # Absolute path to backend/
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent

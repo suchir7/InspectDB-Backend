@@ -144,3 +144,20 @@ def test_postgres_urls_are_pinned_to_psycopg2_driver():
     assert normalize_database_url("postgres://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
     assert normalize_database_url("postgresql+psycopg2://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
     assert normalize_database_url("sqlite:///./inspectdb_dev.db") == "sqlite:///./inspectdb_dev.db"
+
+
+def test_index_creation_retries_while_another_build_is_in_progress():
+    from pymongo.errors import OperationFailure
+
+    repo = MongoDBInspectionRepository(uri="mongodb://localhost:27017")
+    collection = mock.MagicMock()
+    in_progress = OperationFailure("Existing index build in progress on the same collection.", code=40333)
+    # First index: fails twice while another worker builds, then succeeds; the rest succeed at once
+    collection.create_index.side_effect = [in_progress, in_progress] + [None] * 10
+    with mock.patch.object(repo, "_get_collection", return_value=collection), \
+         mock.patch("app.repositories.mongodb_repository.time.sleep") as sleep, \
+         mock.patch("app.repositories.mongodb_repository.logger") as log:
+        repo.ensure_indexes()
+    assert collection.create_index.call_count == 6 + 2
+    assert sleep.call_count == 2
+    log.warning.assert_not_called()

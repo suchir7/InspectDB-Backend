@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 
 import pymongo
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, PyMongoError, DuplicateKeyError
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, PyMongoError, DuplicateKeyError, OperationFailure
 from bson import ObjectId
 
 from app.repositories.base import BaseInspectionRepository
@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 COUNTERS_COLLECTION = "counters"
 REPORT_ID_COUNTER = "inspection_report_id"
 MAX_ID_ALLOCATION_ATTEMPTS = 5
+
+# DocumentDB builds one index per collection at a time (40333); concurrent workers can also
+# collide on the same unique index build (11000). Both clear once the other build finishes.
+RETRYABLE_INDEX_ERROR_CODES = {40333, 11000}
+MAX_INDEX_BUILD_ATTEMPTS = 10
+INDEX_BUILD_RETRY_SECONDS = 1.0
 
 class MongoDBInspectionRepository(BaseInspectionRepository):
     """
@@ -83,12 +89,21 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
             ([("findings.severity", pymongo.ASCENDING)], {}),
         ]
         for keys, options in index_specs:
-            try:
-                collection.create_index(keys, **options)
-            except ConnectionFailure:
-                raise
-            except PyMongoError as e:
-                logger.warning(f"Could not create index {keys} on {self.collection_name}: {e}")
+            for attempt in range(MAX_INDEX_BUILD_ATTEMPTS):
+                try:
+                    collection.create_index(keys, **options)
+                    break
+                except ConnectionFailure:
+                    raise
+                except OperationFailure as e:
+                    if e.code in RETRYABLE_INDEX_ERROR_CODES and attempt < MAX_INDEX_BUILD_ATTEMPTS - 1:
+                        time.sleep(INDEX_BUILD_RETRY_SECONDS)
+                        continue
+                    logger.warning(f"Could not create index {keys} on {self.collection_name}: {e}")
+                    break
+                except PyMongoError as e:
+                    logger.warning(f"Could not create index {keys} on {self.collection_name}: {e}")
+                    break
 
     def _next_report_id(self) -> str:
         """Allocates a unique, human-readable report ID from an atomic counter document."""
