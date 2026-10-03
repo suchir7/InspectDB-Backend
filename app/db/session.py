@@ -9,7 +9,18 @@ import app.models  # noqa: F401
 
 logger = logging.getLogger("inspectdb.db")
 
-DATABASE_URL = settings.DATABASE_URL.strip() if settings.DATABASE_URL else ""
+def normalize_database_url(url: str) -> str:
+    """
+    Pins PostgreSQL URLs to the psycopg2 driver this project ships (psycopg2-binary).
+    SQLAlchemy 2.1+ otherwise maps plain postgresql:// URLs to psycopg (v3).
+    """
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
+DATABASE_URL = normalize_database_url(settings.DATABASE_URL.strip()) if settings.DATABASE_URL else ""
 
 # If DATABASE_URL is not set or empty, fallback to local sqlite for safety/dev
 if not DATABASE_URL:

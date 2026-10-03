@@ -135,3 +135,12 @@ def test_paused_document_store_returns_friendly_503():
     assert body["error"] == "DocumentStoreUnavailable"
     assert "paused" in body["detail"]
     assert "docdb.cluster-x" not in res.text
+
+
+def test_postgres_urls_are_pinned_to_psycopg2_driver():
+    from app.db.session import normalize_database_url
+    neon = "postgresql://user:pw@ep-x-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+    assert normalize_database_url(neon) == neon.replace("postgresql://", "postgresql+psycopg2://", 1)
+    assert normalize_database_url("postgres://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
+    assert normalize_database_url("postgresql+psycopg2://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
+    assert normalize_database_url("sqlite:///./inspectdb_dev.db") == "sqlite:///./inspectdb_dev.db"
