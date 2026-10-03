@@ -37,8 +37,12 @@ if ! docker compose version >/dev/null 2>&1; then
   chmod +x "$PLUGIN_DIR/docker-compose"
 fi
 
-if ! docker buildx version >/dev/null 2>&1; then
-  echo "Installing Docker Buildx plugin..."
+# Compose builds need buildx >= 0.17; Amazon Linux's docker package ships an older one.
+# Plugins in $PLUGIN_DIR take precedence over the system copy in /usr/libexec/docker/cli-plugins.
+MIN_BUILDX=0.17.0
+CURRENT_BUILDX="$(docker buildx version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+if [ -z "$CURRENT_BUILDX" ] || [ "$(printf '%s\n' "$MIN_BUILDX" "$CURRENT_BUILDX" | sort -V | head -n 1)" != "$MIN_BUILDX" ]; then
+  echo "Installing Docker Buildx plugin (found: ${CURRENT_BUILDX:-none}, need >= $MIN_BUILDX)..."
   BUILDX_URL="$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
     | grep -o "https://[^\"]*linux-${BUILDX_ARCH}\"" | tr -d '"' | head -n 1)"
   curl -fsSL "$BUILDX_URL" -o "$PLUGIN_DIR/docker-buildx"
