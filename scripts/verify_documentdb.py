@@ -47,6 +47,7 @@ def record(section, name, passed, detail):
 
 REPORTS = [
     {
+        "id": "VERIFY-1",
         "title": "Substation transformer thermal scan",
         "category": "Electrical",
         "findings": [
@@ -56,6 +57,7 @@ REPORTS = [
         "dynamic_attributes": {"electrical_telemetry": {"phases": {"phase_a": {"voltage_kv": 13.82, "current_amps": 104.5}}}},
     },
     {
+        "id": "VERIFY-2",
         "title": "High-rise fire safety audit",
         "category": "Fire Safety",
         "findings": [
@@ -65,6 +67,7 @@ REPORTS = [
         "dynamic_attributes": {"fire_safety_data": {"extinguishers": [{"floor": 3, "pressure_psi": 195}], "sprinkler_zones": 14}},
     },
     {
+        "id": "VERIFY-3",
         "title": "Rooftop chiller diagnostics",
         "category": "HVAC",
         "findings": [],
@@ -113,28 +116,41 @@ def database_checks():
                f"findings by severity → {counts}")
 
         coll.create_index([("findings.severity", 1)])
-        plan = coll.find({"findings.severity": "critical"}).explain()
-        plan_text = str(plan.get("queryPlanner", plan))
-        record("Use case 2", "Nested field index is used by the query planner", "IXSCAN" in plan_text,
-               f"explain() winning plan uses {'IXSCAN (index scan)' if 'IXSCAN' in plan_text else 'no index'} on findings.severity")
+        chosen = str(coll.find({"findings.severity": "critical"}).explain().get("queryPlanner", {}))
+        hinted = str(coll.find({"findings.severity": "critical"}).hint([("findings.severity", 1)]).explain().get("queryPlanner", {}))
+        record("Use case 2", "A multikey index on a nested array field serves the query", "IXSCAN" in hinted,
+               f"with the index: {'IXSCAN (index scan)' if 'IXSCAN' in hinted else 'no index scan'} · planner's own choice on "
+               f"{coll.estimated_document_count()} documents: {'IXSCAN' if 'IXSCAN' in chosen else 'COLLSCAN (expected for a tiny collection)'}")
 
         # ---------------- Bottleneck 1 ----------------
         print("\nBOTTLENECK 1 · MongoDB feature compatibility gaps break the driver")
-        if cfg.mode == "documentdb":
-            default_kwargs = {**cfg.client_kwargs, "retryWrites": True}
-            default_client = MongoClient(cfg.uri, serverSelectionTimeoutMS=cfg.timeout_ms, **default_kwargs)
+        if cfg.mode == "documentdb" and cfg.client_kwargs.get("tls"):
+            # A stock driver trusts only public CAs; DocumentDB certificates are issued by the Amazon RDS CA
+            no_ca_kwargs = {k: v for k, v in cfg.client_kwargs.items() if k != "tlsCAFile"}
+            stock_client = MongoClient(cfg.uri, serverSelectionTimeoutMS=4000, connectTimeoutMS=4000, **no_ca_kwargs)
             try:
-                default_client[cfg.database][name].insert_one({"probe": "default driver settings"})
-                broke, message = False, "insert succeeded"
+                stock_client.admin.command("ping")
+                broke, message = False, "connected"
             except PyMongoError as e:
-                broke, message = True, str(e).split(", full error")[0][:140]
+                text = str(e)
+                broke, message = True, "certificate verify failed" if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text else text[:120]
             finally:
-                default_client.close()
-            fixed_ok = coll.insert_one({"probe": "app driver settings"}).acknowledged
-            record("Bottleneck 1", "Default driver setting (retryWrites=true) breaks; the app's setting works", broke and fixed_ok,
-                   f"default driver: {message} · app client (retryWrites=false): insert acknowledged={fixed_ok}")
+                stock_client.close()
+            app_ok = client.admin.command("ping").get("ok") == 1
+            record("Bottleneck 1", "Stock TLS settings fail; the app's Amazon CA bundle connects", broke and app_ok,
+                   f"without the CA bundle: {message} · with global-bundle.pem: ping ok={app_ok}")
+
+            retry_client = MongoClient(cfg.uri, serverSelectionTimeoutMS=cfg.timeout_ms, **{**cfg.client_kwargs, "retryWrites": True})
+            try:
+                retry_client[cfg.database][name].insert_one({"id": "VERIFY-RETRY", "probe": "retryWrites=true"})
+                retry_note = "DocumentDB 5.0 accepts retryable writes"
+            except PyMongoError as e:
+                retry_note = f"retryable writes rejected ({str(e)[:80]})"
+            finally:
+                retry_client.close()
+            print(f"  [INFO] {retry_note}; the app keeps retryWrites=false so it also works on DocumentDB 3.6/4.0.")
         else:
-            record("Bottleneck 1", "Retryable-writes check", True, f"skipped: store is {cfg.engine_label}, not DocumentDB")
+            record("Bottleneck 1", "TLS / CA bundle check", True, f"skipped: store is {cfg.engine_label}, not DocumentDB with TLS")
 
         where_query = {"$where": "this.findings.length > 1"}
         report = compatibility_analyzer.analyze_query(where_query, target_version="5.0")

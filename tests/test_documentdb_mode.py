@@ -161,3 +161,18 @@ def test_index_creation_retries_while_another_build_is_in_progress():
     assert collection.create_index.call_count == 6 + 2
     assert sleep.call_count == 2
     log.warning.assert_not_called()
+
+
+def test_real_duplicate_key_errors_are_not_retried():
+    from pymongo.errors import OperationFailure
+
+    repo = MongoDBInspectionRepository(uri="mongodb://localhost:27017")
+    collection = mock.MagicMock()
+    duplicate = OperationFailure("could not create unique index: reports index: id_1", code=11000,
+                                 details={"errmsg": "could not create unique index: reports index: id_1"})
+    race = OperationFailure("Non-unique", code=11000, details={"errmsg": "Non-unique"})
+    collection.create_index.side_effect = [duplicate] + [race, None] + [None] * 10
+    with mock.patch.object(repo, "_get_collection", return_value=collection),          mock.patch("app.repositories.mongodb_repository.time.sleep") as sleep,          mock.patch("app.repositories.mongodb_repository.logger") as log:
+        repo.ensure_indexes()
+    assert log.warning.call_count == 1      # the real duplicate is reported once, not retried
+    assert sleep.call_count == 1            # only the race was retried

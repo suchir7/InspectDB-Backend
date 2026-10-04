@@ -42,7 +42,7 @@ def get_document_store_config() -> DocumentStoreConfig:
     'documentdb' targets Amazon DocumentDB; any other mode targets local MongoDB.
     """
     if get_storage_mode() == "documentdb":
-        # DocumentDB does not support retryable writes, so they must be disabled explicitly.
+        # DocumentDB 3.6/4.0 reject retryable writes (5.0 accepts them); keep them off so every engine version works.
         client_kwargs: Dict[str, Any] = {"retryWrites": False}
         if settings.DOCUMENTDB_TLS:
             client_kwargs["tls"] = True

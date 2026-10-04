@@ -21,11 +21,20 @@ COUNTERS_COLLECTION = "counters"
 REPORT_ID_COUNTER = "inspection_report_id"
 MAX_ID_ALLOCATION_ATTEMPTS = 5
 
-# DocumentDB builds one index per collection at a time (40333); concurrent workers can also
-# collide on the same unique index build (11000). Both clear once the other build finishes.
-RETRYABLE_INDEX_ERROR_CODES = {40333, 11000}
 MAX_INDEX_BUILD_ATTEMPTS = 10
 INDEX_BUILD_RETRY_SECONDS = 1.0
+
+
+def is_index_build_race(error: OperationFailure) -> bool:
+    """
+    DocumentDB builds one index per collection at a time (code 40333), and workers racing on the
+    same unique index get a bare 'Non-unique' 11000. Both clear once the other build finishes.
+    A real duplicate-key violation ('could not create unique index ...') is not retried.
+    """
+    if error.code == 40333:
+        return True
+    message = ((error.details or {}).get("errmsg") or str(error)).strip()
+    return error.code == 11000 and message == "Non-unique"
 
 class MongoDBInspectionRepository(BaseInspectionRepository):
     """
@@ -96,7 +105,7 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
                 except ConnectionFailure:
                     raise
                 except OperationFailure as e:
-                    if e.code in RETRYABLE_INDEX_ERROR_CODES and attempt < MAX_INDEX_BUILD_ATTEMPTS - 1:
+                    if is_index_build_race(e) and attempt < MAX_INDEX_BUILD_ATTEMPTS - 1:
                         time.sleep(INDEX_BUILD_RETRY_SECONDS)
                         continue
                     logger.warning(f"Could not create index {keys} on {self.collection_name}: {e}")

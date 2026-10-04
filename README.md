@@ -411,7 +411,7 @@ Output:
 
 Set `STORAGE_MODE=documentdb` and the backend stores inspection reports in an Amazon DocumentDB cluster:
 
-- Connects with TLS using the Amazon CA bundle (`global-bundle.pem`, baked into the Docker image) and `retryWrites=false`, which DocumentDB requires.
+- Connects with TLS using the Amazon CA bundle (`global-bundle.pem`, baked into the Docker image), which stock drivers do not trust, and `retryWrites=false`, which DocumentDB 3.6/4.0 require.
 - Creates the required indexes on startup (unique report `id`, per-user lookups, severity/category filters).
 - Allocates report IDs from an atomic counter, so they never collide across users or after deletes.
 - Refuses to start with a clear error if `DOCUMENTDB_URI` or the CA bundle is missing, and never silently falls back to in-memory storage.
