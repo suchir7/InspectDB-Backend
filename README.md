@@ -1,6 +1,7 @@
 # InspectDB: Inspection Report Management System
 
 > **Repositories:** this repository contains the FastAPI backend, infrastructure (`deploy/`), and full project documentation. The React frontend lives in [suchir7/InspectDB-Frontend](https://github.com/suchir7/InspectDB-Frontend) and is hosted on Vercel.
+> 
 ### Amazon DocumentDB Architecture & Neon PostgreSQL Authentication (AWS Project)
 
 InspectDB is a full-stack, enterprise-grade inspection report management system architected for variable-schema documents, nested JSON structures, and secure user management. It is designed to demonstrate modern multi-database cloud architectures:
