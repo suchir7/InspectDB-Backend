@@ -6,8 +6,6 @@ from app.schemas.cost import (
     DeploymentOptionEstimate,
     CostHealth,
     CostEstimateResponse,
-    CostTrendPoint,
-    CostTrendResponse,
     CostDriverDetail,
     CostAnomalyReport,
     BudgetStatus,
@@ -15,29 +13,23 @@ from app.schemas.cost import (
     OptimizationSimulationResponse
 )
 
-# Centralized AWS DocumentDB Rate Cards & Baseline Pricing Constants (Q1 2026)
+# Official AWS list prices for Amazon DocumentDB in us-east-1 (AWS Price List API, October 2026).
+# Planning estimates only; the Cost Monitoring page reads live prices, usage and billed spend from AWS.
 DOCUMENTDB_PRICING: Dict[str, Any] = {
-    "version": "2026.1",
-    "source": "AWS DocumentDB Standard Rate Card (US East N. Virginia baseline)",
+    "version": "2026.10",
+    "source": "AWS Price List API, Amazon DocumentDB, US East (N. Virginia)",
     "currency": "USD",
     "compute_hourly": {
         "local": 0.00,
-        "db.t3.medium": 0.078,  # 2 vCPU, 4.0 GiB RAM ($0.078/hr)
-        "db.r5.large": 0.277,   # 2 vCPU, 16.0 GiB RAM ($0.277/hr)
-        "db.r6g.large": 0.245,  # 2 vCPU, 16.0 GiB RAM AWS Graviton2 ($0.245/hr)
-        "elastic_dcu": 0.12     # DocumentDB Compute Unit (DCU) per hour ($0.12/DCU-hr)
+        "db.t3.medium": 0.078,    # 2 vCPU, 4 GiB
+        "db.t4g.medium": 0.07566, # 2 vCPU, 4 GiB (Graviton2)
+        "db.r5.large": 0.277,     # 2 vCPU, 16 GiB
+        "db.r6g.large": 0.26315,  # 2 vCPU, 16 GiB (Graviton2)
+        "elastic_dcu": 0.0822     # DocumentDB Serverless, per DCU-hour
     },
-    "storage_per_gb_month": 0.10,     # $0.10 per GB-month (6-way replicated across 3 AZs)
-    "io_per_million": 0.20,           # $0.20 per 1,000,000 I/O requests
-    "backup_per_gb_month": 0.095,     # $0.095 per GB-month for storage beyond 100% of cluster storage
-    "region_multipliers": {
-        "us-east-1": 1.00,
-        "us-west-2": 1.00,
-        "eu-west-1": 1.10,
-        "eu-central-1": 1.12,
-        "ap-south-1": 1.05,
-        "ap-southeast-1": 1.10
-    }
+    "storage_per_gb_month": 0.10,     # Standard storage
+    "io_per_million": 0.20,           # Standard storage I/O
+    "backup_per_gb_month": 0.021,     # Backup storage beyond 100% of cluster size
 }
 
 class CostCalculator:
@@ -49,7 +41,8 @@ class CostCalculator:
 
     @staticmethod
     def calculate_workload_costs(workload: WorkloadInput) -> CostEstimateResponse:
-        region_mult = DOCUMENTDB_PRICING["region_multipliers"].get(workload.region.lower(), 1.00)
+        # us-east-1 list prices; other regions are priced live on the Cost Monitoring page
+        region_mult = 1.0
         
         # Monthly requests & I/O calculation (30 days/month average)
         monthly_requests = workload.requests_per_day * 30
@@ -106,7 +99,7 @@ class CostCalculator:
                 "storage_rate_per_gb": DOCUMENTDB_PRICING["storage_per_gb_month"] * region_mult,
                 "io_rate_per_million": DOCUMENTDB_PRICING["io_per_million"] * region_mult,
                 "backup_rate_per_gb": DOCUMENTDB_PRICING["backup_per_gb_month"] * region_mult,
-                "disclaimer": "Academic Project Simulation Mode. Pricing calculations are computed deterministically from AWS rate cards. No live AWS resources are billed or provisioned."
+                "disclaimer": "Planning estimate from AWS list prices (us-east-1). Live configuration, usage and billed spend are on the Cost Monitoring page."
             }
         )
 
@@ -183,11 +176,11 @@ class CostCalculator:
             total_monthly_cost=0.0,
             hourly_rate_effective=0.0,
             assumptions=[
-                "Runs purely inside local in-memory mock repository or Docker container",
+                "Runs in the local in-memory store or a local MongoDB container",
                 "Zero AWS cloud infrastructure used",
                 "Local persistence stored on developer workstation SSD"
             ],
-            included_components=["Local developer execution", "Zero-cost simulation"],
+            included_components=["Local developer execution", "No AWS charges"],
             excluded_components=["AWS Cloud infrastructure", "Managed backups", "Multi-AZ replication"]
         )
         return DeploymentOptionEstimate(
@@ -204,7 +197,7 @@ class CostCalculator:
             operational_complexity="Low",
             pros=["Zero AWS cluster costs ($0.00)", "Instant query response", "No AWS networking or IAM configuration needed"],
             cons=["No cloud multi-user persistence", "No automated AWS snapshots", "Not accessible from cloud environments"],
-            recommended_for="Phase 1 development, student coursework, and local validation."
+            recommended_for="Local development, coursework and query validation."
         )
 
     @staticmethod
@@ -425,78 +418,8 @@ class CostCalculator:
         )
 
     # ---------------------------------------------------------
-    # COST MONITORING & TREND METHODS (ACADEMIC SIMULATION MODE)
+    # COST DRIVERS, ANOMALIES & WHAT-IF (planning math from list prices)
     # ---------------------------------------------------------
-
-    @staticmethod
-    def calculate_cost_trend(workload: WorkloadInput, timeframe: str = "30d") -> CostTrendResponse:
-        """
-        Generates deterministic daily and cumulative cost points over the requested timeframe
-        based on the user's workload parameters.
-        """
-        days_map = {"7d": 7, "30d": 30, "90d": 90}
-        total_days = days_map.get(timeframe, 30)
-
-        estimate = CostCalculator.calculate_workload_costs(workload)
-        monthly_total = estimate.selected_deployment.monthly_cost
-        breakdown = estimate.selected_deployment.breakdown
-
-        base_daily_compute = breakdown.compute_cost / 30.0
-        base_daily_storage = breakdown.storage_cost / 30.0
-        base_daily_io = breakdown.io_cost / 30.0
-        base_daily_backup = breakdown.backup_cost / 30.0
-        base_daily_total = monthly_total / 30.0
-
-        points: List[CostTrendPoint] = []
-        cumulative_sum = 0.0
-
-        # Simulate day-by-day pattern (e.g. slight weekday vs weekend variation if scheduled dev)
-        from datetime import datetime, timedelta, timezone
-        now = datetime.now(timezone.utc)
-        start_date = now - timedelta(days=total_days - 1)
-
-        is_scheduled = workload.monthly_uptime_hours < 500
-
-        for day_idx in range(total_days):
-            current_day = start_date + timedelta(days=day_idx)
-            is_weekend = current_day.weekday() in [5, 6]  # Saturday, Sunday
-
-            if is_scheduled and is_weekend:
-                # Weekend reduction for scheduled development workloads
-                day_compute = base_daily_compute * 0.15
-                day_io = base_daily_io * 0.25
-                day_storage = base_daily_storage
-                day_backup = base_daily_backup
-            else:
-                day_compute = base_daily_compute
-                day_io = base_daily_io
-                day_storage = base_daily_storage
-                day_backup = base_daily_backup
-
-            day_total = round(day_compute + day_storage + day_io + day_backup, 4)
-            cumulative_sum += day_total
-
-            points.append(
-                CostTrendPoint(
-                    date=current_day.strftime("%Y-%m-%d"),
-                    day_number=day_idx + 1,
-                    daily_cost=round(day_total, 3),
-                    cumulative_cost=round(cumulative_sum, 2),
-                    projected_monthly_cost=round(monthly_total, 2),
-                    compute_cost=round(day_compute, 3),
-                    storage_cost=round(day_storage, 3),
-                    io_cost=round(day_io, 3),
-                    backup_cost=round(day_backup, 3)
-                )
-            )
-
-        return CostTrendResponse(
-            timeframe=timeframe,
-            current_daily_cost=round(base_daily_total, 2),
-            projected_monthly_cost=round(monthly_total, 2),
-            points=points,
-            assumptions=f"Simulated {total_days}-day cost trajectory based on {workload.selected_deployment} deployment ({workload.monthly_uptime_hours}h/mo uptime)."
-        )
 
     @staticmethod
     def calculate_cost_drivers(workload: WorkloadInput, estimate: CostEstimateResponse) -> List[CostDriverDetail]:
@@ -593,7 +516,8 @@ class CostCalculator:
             severity = "info"
 
             if current_workload.monthly_uptime_hours >= 700 and current_workload.environment_tier == "development":
-                factors.append("24/7 continuous uptime configured for development tier (adds ~$44.46/mo compute over scheduled dev)")
+                extra = (730 - 160) * DOCUMENTDB_PRICING["compute_hourly"]["db.t3.medium"]
+                factors.append(f"24/7 continuous uptime configured for development tier (adds ~${extra:.2f}/mo compute over a 160 h/mo schedule)")
                 has_anomaly = True
                 severity = "warning"
 

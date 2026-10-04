@@ -29,6 +29,7 @@ The live deployment reuses a DocumentDB cluster and server that were created in 
 | API URL | `https://34-206-218-109.sslip.io/api` (health: `/api/health`, docs: `/api/docs`) |
 | Running schedule | stack `inspectdb-docdb-schedule` ([`deploy/docdb-schedule.yaml`](deploy/docdb-schedule.yaml)): start 9:00, stop 21:00, Mon–Fri, Asia/Kolkata |
 | Deploys | GitHub Actions on every push to `main` (secrets `EC2_HOST`, `EC2_SSH_KEY`, `ENV_PRODUCTION`) |
+| Live cost data | Read-only role from [`deploy/backend-insights-role.yaml`](deploy/backend-insights-role.yaml) attached to the API server |
 
 ## Cost (approximate)
 
@@ -115,6 +116,36 @@ Register in the app first, then run:
 ssh -i ~/.ssh/inspectdb-key.pem ec2-user@<AppPublicIP> \
   "cd ~/inspectdb && sudo docker compose --env-file .env.production exec -T backend python scripts/seed_mongodb.py --user-email you@example.com"
 ```
+
+## Live cost data for the Cost Monitoring and Cost Optimizer pages
+
+These pages read real data from AWS:
+- the cluster configuration (DocumentDB API)
+- the start/stop schedule (EventBridge Scheduler)
+- usage (CloudWatch)
+- list prices (AWS Price List API)
+- billed spend (Cost Explorer)
+
+The API server needs a **read-only** IAM role for this. Create it and attach it once:
+
+```bash
+aws cloudformation deploy --region us-east-1 --stack-name inspectdb-backend-role   --template-file deploy/backend-insights-role.yaml --capabilities CAPABILITY_IAM
+aws ec2 associate-iam-instance-profile --region us-east-1 --instance-id <api-server-instance-id>   --iam-instance-profile Name=$(aws cloudformation describe-stacks --region us-east-1 --stack-name inspectdb-backend-role   --query "Stacks[0].Outputs[?OutputKey=='InstanceProfileName'].OutputValue" --output text)
+```
+
+Then make sure `.env.production` contains `AWS_INSIGHTS_ENABLED=true`, `AWS_REGION` and `DOCUMENTDB_CLUSTER_ID`. Until the role is attached, the pages say "Live AWS data not connected" and show no estimates.
+
+Cost Explorer charges $0.01 per request. Responses are cached for 12 hours, which comes to about $1 a month.
+
+## Verifying the project brief
+
+[`scripts/verify_documentdb.py`](scripts/verify_documentdb.py) checks the two use cases and two bottlenecks against the live system. The database checks use a temporary collection that is dropped afterwards.
+
+```bash
+ssh -i ~/.ssh/inspectdb-key.pem ec2-user@<AppPublicIP>   "cd ~/inspectdb && sudo docker compose --env-file .env.production exec -T backend python scripts/verify_documentdb.py"
+```
+
+The latest results are in [VERIFICATION.md](VERIFICATION.md).
 
 ## Day-to-day operations
 

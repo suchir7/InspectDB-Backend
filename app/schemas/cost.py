@@ -2,11 +2,11 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 class WorkloadInput(BaseModel):
-    requests_per_day: int = Field(default=5000, ge=100, le=10000000, description="Expected API/Database requests per day")
+    requests_per_day: int = Field(default=5000, ge=0, le=10000000, description="Expected API/Database requests per day")
     read_percentage: float = Field(default=85.0, ge=0.0, le=100.0, description="Percentage of read queries (vs writes)")
     write_percentage: float = Field(default=15.0, ge=0.0, le=100.0, description="Percentage of write operations (vs reads)")
-    avg_document_size_kb: float = Field(default=8.0, ge=0.5, le=16000.0, description="Average JSON document size in KB")
-    data_storage_gb: float = Field(default=15.0, ge=1.0, le=10000.0, description="Total active document data size in GB")
+    avg_document_size_kb: float = Field(default=8.0, ge=0.01, le=16000.0, description="Average JSON document size in KB")
+    data_storage_gb: float = Field(default=15.0, ge=0.0, le=10000.0, description="Total active document data size in GB")
     backup_retention_days: int = Field(default=7, ge=1, le=35, description="Backup retention window in days")
     monthly_uptime_hours: int = Field(default=730, ge=0, le=730, description="Active running hours per month (730 = 24/7, 160 = 8h/weekday)")
     environment_tier: str = Field(default="development", description="development | demo | production")
@@ -100,29 +100,11 @@ class CostAnalysisResult(BaseModel):
     recommendations: List[Recommendation]
     missing_information: List[str]
     is_cached: bool = False
-    is_demo_mode: bool = True
+    is_ai_powered: bool = False
     gemini_model: str = "gemini-2.5-flash"
 
 class RecommendationStatusUpdate(BaseModel):
     status: str = Field(..., description="pending | applied | dismissed")
-
-class CostTrendPoint(BaseModel):
-    date: str
-    day_number: int
-    daily_cost: float
-    cumulative_cost: float
-    projected_monthly_cost: float
-    compute_cost: float
-    storage_cost: float
-    io_cost: float
-    backup_cost: float
-
-class CostTrendResponse(BaseModel):
-    timeframe: str = "30d"  # 7d | 30d | 90d
-    current_daily_cost: float
-    projected_monthly_cost: float
-    points: List[CostTrendPoint]
-    assumptions: str = "Simulated cost trend — based on current workload assumptions"
 
 class CostDriverDetail(BaseModel):
     driver_name: str
@@ -150,29 +132,6 @@ class BudgetStatus(BaseModel):
     remaining_budget: float
     utilization_percent: float
     status: str = "within"  # within | near | exceeded
-
-class CostMonitoringSnapshot(BaseModel):
-    snapshot_id: str
-    timestamp: str
-    title: str
-    workload: WorkloadInput
-    deployment_tier: str
-    monthly_cost: float
-    daily_cost: float
-    breakdown: CostBreakdown
-    drivers: List[CostDriverDetail] = Field(default_factory=list)
-    optimization_opportunity_percent: float = 0.0
-
-class CostComparisonReport(BaseModel):
-    baseline_title: str
-    current_title: str
-    baseline_cost: float
-    current_cost: float
-    cost_difference: float
-    percentage_difference: float
-    breakdown_diff: Dict[str, float] = Field(default_factory=dict)
-    deterministic_reasons: List[str] = Field(default_factory=list)
-    gemini_explanation: Optional[str] = None
 
 class OptimizationSimulationRequest(BaseModel):
     current_workload: WorkloadInput

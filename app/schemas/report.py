@@ -141,7 +141,7 @@ class DashboardStats(BaseModel):
     category_distribution: Dict[str, int]
     severity_distribution: Dict[str, int]
     is_demonstration: bool = True
-    storage_mode: str = "Local In-Memory Repository (Phase 1)"
+    storage_mode: str = "Local In-Memory Repository"
     aws_connected: bool = False
     schema_fields_count: int = 0
     nested_fields_count: int = 0

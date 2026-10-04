@@ -599,7 +599,7 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
             "category_distribution": category_dist,
             "severity_distribution": severity_dist,
             "is_demonstration": True,
-            "storage_mode": "Local In-Memory Repository (Phase 1)",
+            "storage_mode": "Local In-Memory Repository",
             "aws_connected": False,
             "schema_fields_count": len(schema_overview.fields),
             "nested_fields_count": schema_overview.nested_fields_count,

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from app.schemas.cost import (
     CostEstimateResponse,
     CostHealth
 )
-from app.services.cost_calculator import CostCalculator
+from app.services.cost_calculator import CostCalculator, DOCUMENTDB_PRICING
 from app.services.ai_service import ai_query_service
 from app.config.settings import settings
 
@@ -287,12 +288,9 @@ class CostOptimizerService:
                 ]),
                 gemini_summary=summary,
                 recommendations=recommendations,
-                missing_information=parsed.get("missing_information", [
-                    "Peak concurrency during field shift handovers",
-                    "Expected binary attachment payload sizes"
-                ]),
+                missing_information=parsed.get("missing_information", []),
                 is_cached=False,
-                is_demo_mode=True,
+                is_ai_powered=True,
                 gemini_model=settings.GEMINI_MODEL
             )
 
@@ -313,6 +311,9 @@ class CostOptimizerService:
         
         # Calculate concrete savings for scheduling
         scheduled_savings = round(hourly_compute * (1.0 - (160.0 / 730.0)), 2) if is_continuous else 0.0
+        t3_rate = DOCUMENTDB_PRICING["compute_hourly"]["db.t3.medium"]
+        always_on_compute, scheduled_compute = round(t3_rate * 730, 2), round(t3_rate * 160, 2)
+        budget = max(5, math.ceil(selected_opt.monthly_cost * 1.2))
 
         why_compute = {
             "runtime_hours": f"{selected_opt.monthly_uptime_hours} hrs/month",
@@ -349,10 +350,10 @@ class CostOptimizerService:
                 impact="high",
                 explanation=f"Running a DocumentDB cluster 24/7 ({selected_opt.monthly_uptime_hours} hrs) incurs charges during inactive nights and weekends. For development and coursework, scheduling active hours to 8h/day (160h/month) eliminates ~78% of compute expenses.",
                 reason="Continuous runtime is the largest contributor to the current estimate.",
-                estimated_impact="High cost reduction (~78% compute savings, up to $44.46/mo)",
+                estimated_impact=f"High cost reduction (~78% compute savings, about ${scheduled_savings:.2f}/mo)",
                 tradeoff="Cluster requires ~5-8 minutes startup delay upon scheduled resumption.",
-                action="Configure AWS EventBridge cron rules with AWS Lambda to automatically stop instances at 6 PM and resume at 8 AM weekdays.",
-                proposed_action="Configure AWS EventBridge rules to trigger AWS Lambda start/stop functions on the DocumentDB cluster.",
+                action="Use EventBridge Scheduler (deploy/docdb-schedule.yaml) to start and stop the cluster on a weekday schedule.",
+                proposed_action="Create EventBridge Scheduler start/stop schedules that call the DocumentDB StartDBCluster and StopDBCluster APIs.",
                 estimated_monthly_savings=scheduled_savings if is_continuous else None,
                 trade_offs=[
                     "Cluster takes ~5-8 minutes to start up upon scheduled trigger",
@@ -399,16 +400,16 @@ class CostOptimizerService:
                 reason="Unmonitored cloud resources risk unintentional billing spikes during active academic development.",
                 estimated_impact="Eliminates risk of surprise cloud billing by alerting at defined spend thresholds.",
                 tradeoff="Alarms are advisory and do not automatically kill instances unless linked with SSM automation.",
-                action="Set a strict AWS Budget threshold at $10.00/month with 50%, 80%, and 100% email alerts.",
-                proposed_action="Set a strict AWS Budget threshold at $10.00/month with 50%, 80%, and 100% email alerts.",
+                action=f"Set an AWS Budget at ${budget}/month with 50%, 80%, and 100% email alerts.",
+                proposed_action=f"Set an AWS Budget at ${budget}/month with 50%, 80%, and 100% email alerts.",
                 estimated_monthly_savings=None,
                 trade_offs=[
                     "Alarms are advisory and do not automatically kill running instances unless configured with SSM automation"
                 ],
                 implementation_steps=[
                     "Navigate to AWS Billing & Cost Management > Budgets.",
-                    "Create a Cost Budget with Monthly recurring cadence of $10.00.",
-                    "Add notification triggers at 50% ($5), 80% ($8), and 100% ($10) sent to project team emails."
+                    f"Create a monthly Cost Budget of ${budget}.",
+                    f"Add notification triggers at 50% (${budget * 0.5:g}), 80% (${budget * 0.8:g}), and 100% (${budget}) sent to project team emails."
                 ],
                 why_context=why_budget,
                 status="pending"
@@ -456,7 +457,7 @@ class CostOptimizerService:
         ]
 
         tradeoffs = [
-            "Scheduled instances reduce monthly compute cost from $56.94 to $12.48, but introduce a 5-8 minute spin-up delay.",
+            f"Scheduled instances reduce monthly compute cost from ${DOCUMENTDB_PRICING['compute_hourly']['db.t3.medium'] * 730:.2f} to ${DOCUMENTDB_PRICING['compute_hourly']['db.t3.medium'] * 160:.2f}, but introduce a 5-8 minute spin-up delay.",
             "Single-AZ deployments reduce infrastructure cost by ~50% vs Multi-AZ, at the expense of automatic failover."
         ]
 
@@ -498,7 +499,7 @@ class CostOptimizerService:
                 "Expected document upload sizes (KB/MB per report with image attachments)"
             ],
             is_cached=False,
-            is_demo_mode=True,
+            is_ai_powered=False,
             gemini_model=settings.GEMINI_MODEL
         )
 

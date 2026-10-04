@@ -37,20 +37,6 @@ def unoptimized_24_7_workload():
         selected_deployment="provisioned_single_az"
     )
 
-def test_cost_trend_generation(standard_dev_workload):
-    trend_7d = CostCalculator.calculate_cost_trend(standard_dev_workload, "7d")
-    assert trend_7d.timeframe == "7d"
-    assert len(trend_7d.points) == 7
-    assert trend_7d.current_daily_cost > 0
-    assert trend_7d.points[-1].cumulative_cost > trend_7d.points[0].cumulative_cost
-
-    trend_30d = CostCalculator.calculate_cost_trend(standard_dev_workload, "30d")
-    assert len(trend_30d.points) == 30
-    assert abs(trend_30d.points[-1].cumulative_cost - trend_30d.projected_monthly_cost) < 5.0
-
-    trend_90d = CostCalculator.calculate_cost_trend(standard_dev_workload, "90d")
-    assert len(trend_90d.points) == 90
-
 def test_cost_drivers_attribution(unoptimized_24_7_workload):
     estimate = CostCalculator.calculate_workload_costs(unoptimized_24_7_workload)
     drivers = CostCalculator.calculate_cost_drivers(unoptimized_24_7_workload, estimate)
@@ -95,24 +81,6 @@ def test_optimization_simulation(unoptimized_24_7_workload):
     assert res.dollar_difference > 0
     assert res.percentage_savings > 0
     assert "reduces estimated cost" in res.explanation
-
-def test_monitoring_snapshots_crud_and_compare(standard_dev_workload, unoptimized_24_7_workload):
-    snap1 = cost_monitoring_service.save_snapshot("Test Baseline", unoptimized_24_7_workload)
-    assert snap1.snapshot_id in [s.snapshot_id for s in cost_monitoring_service.get_snapshots()]
-
-    snap2 = cost_monitoring_service.save_snapshot("Test Optimized", standard_dev_workload)
-    
-    # Compare
-    import asyncio
-    report = asyncio.run(cost_monitoring_service.compare_snapshots(snap1.snapshot_id, snap2.snapshot_id))
-    assert report.baseline_cost > report.current_cost
-    assert report.cost_difference < 0  # cost decreased
-    assert "Compute runtime changed" in report.deterministic_reasons[0]
-
-    # Delete
-    deleted = cost_monitoring_service.delete_snapshot(snap1.snapshot_id)
-    assert deleted is True
-    assert snap1.snapshot_id not in [s.snapshot_id for s in cost_monitoring_service.get_snapshots()]
 
 @pytest.mark.asyncio
 async def test_monitoring_analysis_deterministic_fallback(standard_dev_workload):

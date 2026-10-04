@@ -56,19 +56,17 @@ def test_cost_calculator_scheduled_dev_vs_continuous():
     # Potential savings calculated properly
     assert result.potential_monthly_savings >= 0.0
 
-def test_cost_calculator_regional_multiplier():
-    workload_us = WorkloadInput(region="us-east-1", data_storage_gb=10.0)
-    workload_eu = WorkloadInput(region="eu-west-1", data_storage_gb=10.0)
-
-    res_us = CostCalculator.calculate_workload_costs(workload_us)
-    res_eu = CostCalculator.calculate_workload_costs(workload_eu)
+def test_cost_calculator_uses_published_us_east_1_prices():
+    """Planning estimates use AWS list prices for us-east-1; no invented regional multipliers."""
+    res_us = CostCalculator.calculate_workload_costs(WorkloadInput(region="us-east-1", data_storage_gb=10.0))
+    res_eu = CostCalculator.calculate_workload_costs(WorkloadInput(region="eu-west-1", data_storage_gb=10.0))
 
     single_us = next(opt for opt in res_us.comparison_options if opt.id == "provisioned_single_az")
     single_eu = next(opt for opt in res_eu.comparison_options if opt.id == "provisioned_single_az")
 
-    # EU is 1.10x US
-    assert single_eu.monthly_cost > single_us.monthly_cost
-    assert round(single_us.breakdown.compute_cost * 1.10, 2) == single_eu.breakdown.compute_cost
+    assert single_us.breakdown.compute_cost == round(0.078 * 730, 2)
+    assert single_eu.monthly_cost == single_us.monthly_cost
+    assert res_us.pricing_metadata["region_multiplier"] == 1.0
 
 @pytest.mark.asyncio
 async def test_cost_optimizer_caching_and_history():

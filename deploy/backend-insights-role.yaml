@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  InspectDB - read-only IAM role for the API server, so the Cost Monitoring and Cost Optimizer
+  pages can show the live DocumentDB configuration, CloudWatch usage metrics, start/stop schedule,
+  AWS list prices and Cost Explorer spend. Grants no write access to any AWS resource.
+
+Resources:
+  BackendInsightsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: InspectDB API server - read-only access to DocumentDB cost and usage data
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: inspectdb-cost-insights-readonly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # DocumentDB describe calls use the rds: IAM prefix and do not support resource-level scoping
+              - Sid: DocumentDBConfiguration
+                Effect: Allow
+                Action: [rds:DescribeDBClusters, rds:DescribeDBInstances]
+                Resource: "*"
+              - Sid: StartStopSchedule
+                Effect: Allow
+                Action: [scheduler:ListSchedules, scheduler:GetSchedule]
+                Resource: "*"
+              - Sid: UsageMetrics
+                Effect: Allow
+                Action: [cloudwatch:GetMetricData, cloudwatch:GetMetricStatistics]
+                Resource: "*"
+              - Sid: ActualSpend
+                Effect: Allow
+                Action: [ce:GetCostAndUsage]
+                Resource: "*"
+              - Sid: ListPrices
+                Effect: Allow
+                Action: [pricing:GetProducts]
+                Resource: "*"
+
+  BackendInsightsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref BackendInsightsRole]
+
+Outputs:
+  InstanceProfileName:
+    Description: Attach to the API server with aws ec2 associate-iam-instance-profile
+    Value: !Ref BackendInsightsInstanceProfile
+  RoleName:
+    Value: !Ref BackendInsightsRole

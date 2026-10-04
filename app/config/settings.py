@@ -11,9 +11,8 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api"
     ENVIRONMENT: str = "development"
-    USE_MOCK_DB: bool = True
     
-    # Neon PostgreSQL Relational Database Configuration (Phase 1 Auth & App Data)
+    # Neon PostgreSQL Relational Database Configuration (users & authentication)
     DATABASE_URL: str = ""
     
     # JWT Authentication Configuration
@@ -61,6 +60,15 @@ class Settings(BaseSettings):
     DOCUMENTDB_TLS_CA_FILE: str = "global-bundle.pem"
     DOCUMENTDB_TIMEOUT_MS: int = 5000
     DOCUMENTDB_TARGET_VERSION: str = "5.0"  # Supported: "3.6", "4.0", "5.0", "8.0"
+
+    # Live AWS cost & usage data for the cost pages (read-only; needs an IAM role on the API server)
+    AWS_INSIGHTS_ENABLED: bool = False
+    AWS_REGION: str = "us-east-1"
+    DOCUMENTDB_CLUSTER_ID: str = ""
+    # Shared cache directory for AWS responses (empty = system temp dir)
+    INSIGHTS_CACHE_DIR: str = ""
+    # Comma-separated emails allowed to view account cost data (empty = every signed-in user)
+    INSIGHTS_ALLOWED_EMAILS: str = ""
     
     class Config:
         env_file = str(ENV_PATH)

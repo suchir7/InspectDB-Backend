@@ -4,8 +4,8 @@ from typing import List, Dict, Any, Optional, Tuple
 class BaseInspectionRepository(ABC):
     """
     Abstract repository interface for inspection reports.
-    Decouples business logic from storage implementation (In-Memory for Phase 1,
-    Amazon DocumentDB / MongoDB for Phase 2).
+    Decouples business logic from the storage implementation (in-memory for local
+    development, MongoDB locally, or Amazon DocumentDB in production).
     Enforces user ownership scoping across all retrieval, mutation, and query operations.
     """
 

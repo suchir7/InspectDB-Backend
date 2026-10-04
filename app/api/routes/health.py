@@ -14,7 +14,7 @@ def get_document_store_status() -> Dict[str, Any]:
         return {
             "type": "In-Memory Repository (no database attached)",
             "mode": "memory",
-            "status": "connected_mock",
+            "status": "in_memory",
             "connected": False,
             "cluster_cost_active": False,
             "message": "Inspection reports are held in server memory and are lost when the server restarts."

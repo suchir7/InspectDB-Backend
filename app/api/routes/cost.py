@@ -1,17 +1,14 @@
 from typing import List, Dict, Any
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, status
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.schemas.cost import (
     WorkloadInput,
     CostEstimateResponse,
     CostAnalysisRequest,
     CostAnalysisResult,
-    RecommendationStatusUpdate,
-    CostTrendResponse,
     CostDriverDetail,
     CostAnomalyReport,
-    CostMonitoringSnapshot,
-    CostComparisonReport,
     OptimizationSimulationRequest,
     OptimizationSimulationResponse,
     CostMonitoringAnalysisRequest,
@@ -20,6 +17,7 @@ from app.schemas.cost import (
 from app.services.cost_calculator import CostCalculator
 from app.services.cost_optimizer_service import cost_optimizer_service
 from app.services.cost_monitoring_service import cost_monitoring_service
+from app.services.aws_insights import aws_insights_service
 
 router = APIRouter(prefix="/cost", tags=["AI Cost Optimizer & Monitoring"])
 
@@ -46,65 +44,26 @@ async def analyze_cost_and_deployment(request: CostAnalysisRequest):
         force_refresh=request.force_refresh
     )
 
-@router.get("/history", response_model=List[CostAnalysisResult])
-async def get_cost_analysis_history():
-    """
-    Retrieves historical analysis snapshots, estimate comparisons,
-    and recommendation status states.
-    """
-    return cost_optimizer_service.get_history()
+# =========================================================
+# LIVE AWS DATA (DocumentDB configuration, usage, prices, billed spend)
+# =========================================================
 
-@router.patch("/recommendations/{rec_id}/status")
-async def update_recommendation_status(rec_id: str, update_in: RecommendationStatusUpdate):
+# Sync handler: boto3 calls run in the threadpool instead of blocking the event loop
+@router.get("/live")
+def get_live_cost_overview(refresh: bool = False, current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
     """
-    Updates the operational status of a recommendation (pending, applied, dismissed).
+    Live DocumentDB cluster profile, start/stop schedule, CloudWatch usage, AWS list prices,
+    Cost Explorer spend, a cost model, what-if scenarios and data-backed recommendations.
+    Sections that cannot be read report why instead of returning estimates.
     """
-    if update_in.status not in ["pending", "applied", "dismissed"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Status must be one of: 'pending', 'applied', 'dismissed'."
-        )
-
-    updated = cost_optimizer_service.update_recommendation_status(rec_id, update_in.status)
-    if not updated:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Recommendation with ID '{rec_id}' was not found in active history."
-        )
-
-    return {"message": f"Recommendation '{rec_id}' status updated to '{update_in.status}'.", "id": rec_id, "status": update_in.status}
-
-@router.delete("/history")
-async def clear_cost_history():
-    """
-    Clears local analysis history and cached estimates.
-    """
-    cost_optimizer_service.clear_history()
-    return {"message": "Cost analysis history and cache have been successfully cleared."}
+    if not aws_insights_service.user_allowed(current_user.email):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is not allowed to view AWS cost data.")
+    return aws_insights_service.overview(refresh=refresh)
 
 
 # =========================================================
-# AWS DOCUMENTDB COST MONITORING ENDPOINTS
+# PLANNING CALCULATIONS & GEMINI ANALYSIS
 # =========================================================
-
-class TrendRequest(BaseModel):
-    workload: WorkloadInput
-    timeframe: str = Field(default="30d", description="7d | 30d | 90d")
-
-class SnapshotCreateRequest(BaseModel):
-    title: str
-    workload: WorkloadInput
-
-class SnapshotCompareRequest(BaseModel):
-    baseline_snapshot_id: str
-    current_snapshot_id: str
-
-@router.post("/monitoring/trend", response_model=CostTrendResponse)
-async def get_cost_trend(request: TrendRequest):
-    """
-    Returns deterministic daily and cumulative cost points across 7, 30, or 90 days.
-    """
-    return CostCalculator.calculate_cost_trend(request.workload, request.timeframe)
 
 @router.post("/monitoring/drivers", response_model=List[CostDriverDetail])
 async def get_cost_drivers(workload: WorkloadInput):
@@ -134,47 +93,3 @@ async def analyze_cost_monitoring(request: CostMonitoringAnalysisRequest):
     Runs Gemini Cost Analyst evaluation on current metrics, trends, and budget thresholds.
     """
     return await cost_monitoring_service.analyze_monitoring(request)
-
-@router.get("/monitoring/snapshots", response_model=List[CostMonitoringSnapshot])
-async def get_monitoring_snapshots():
-    """
-    Retrieves stored cost monitoring snapshots for tracking and comparisons.
-    """
-    return cost_monitoring_service.get_snapshots()
-
-@router.post("/monitoring/snapshots", response_model=CostMonitoringSnapshot)
-async def create_monitoring_snapshot(request: SnapshotCreateRequest):
-    """
-    Stores a new workload cost snapshot locally.
-    """
-    return cost_monitoring_service.save_snapshot(request.title, request.workload)
-
-@router.delete("/monitoring/snapshots/{snapshot_id}")
-async def delete_monitoring_snapshot(snapshot_id: str):
-    """
-    Deletes a cost monitoring snapshot.
-    """
-    deleted = cost_monitoring_service.delete_snapshot(snapshot_id)
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Snapshot '{snapshot_id}' not found."
-        )
-    return {"message": f"Snapshot '{snapshot_id}' deleted successfully."}
-
-@router.post("/monitoring/compare", response_model=CostComparisonReport)
-async def compare_snapshots_endpoint(request: SnapshotCompareRequest):
-    """
-    Compares two saved snapshots and explains why cost changed.
-    """
-    try:
-        return await cost_monitoring_service.compare_snapshots(
-            request.baseline_snapshot_id,
-            request.current_snapshot_id
-        )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-
