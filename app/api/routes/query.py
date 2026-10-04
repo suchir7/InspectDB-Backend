@@ -1,3 +1,5 @@
+from typing import Any, List
+
 from fastapi import APIRouter, HTTPException, Depends
 from app.services.inspection_service import inspection_service
 from app.services.query_validator import query_validator
@@ -15,6 +17,23 @@ from app.schemas.report import (
 )
 
 router = APIRouter(prefix="/query", tags=["Nested Query Engine"])
+
+
+def _field_paths(node: Any, prefix: str = "") -> List[str]:
+    """Collects the dotted field paths a filter touches, including those inside $elemMatch."""
+    paths: List[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key.startswith("$"):
+                paths.extend(_field_paths(value, prefix))
+            else:
+                path = f"{prefix}.{key}" if prefix else key
+                paths.append(path)
+                paths.extend(_field_paths(value, path))
+    elif isinstance(node, list):
+        for item in node:
+            paths.extend(_field_paths(item, prefix))
+    return paths
 
 @router.get("/schema", response_model=SchemaOverviewResponse)
 async def get_document_schema(
@@ -77,10 +96,10 @@ async def execute_raw_query(
         user_id=current_user.id
     )
     
-    # Estimate depth and complexity
     query_str = str(req.query)
     uses_elem = "$elemMatch" in query_str
-    complexity = "Complex" if uses_elem or "$or" in query_str else "Moderate"
+    depth = max((len(p.split(".")) for p in _field_paths(req.query)), default=1)
+    complexity = "Complex" if (uses_elem or depth >= 3 or "$or" in query_str) else ("Moderate" if depth >= 2 else "Simple")
 
     return RawQueryResponse(
         total_matches=len(matched_reports),
@@ -90,7 +109,7 @@ async def execute_raw_query(
         is_valid=True,
         warnings=warnings,
         complexity=complexity,
-        nested_depth=3 if uses_elem else 2
+        nested_depth=depth
     )
 
 @router.post("/explain", response_model=ExplainQueryResponse)

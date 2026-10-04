@@ -176,3 +176,28 @@ def test_real_duplicate_key_errors_are_not_retried():
         repo.ensure_indexes()
     assert log.warning.call_count == 1      # the real duplicate is reported once, not retried
     assert sleep.call_count == 1            # only the race was retried
+
+
+def test_documentdb_query_returns_filter_in_interface_order():
+    """The API reports `mongo_equivalent_query` from the third tuple slot; both repositories must agree."""
+    repo = MongoDBInspectionRepository(uri="mongodb://localhost:27017")
+    collection = mock.MagicMock()
+    collection.find.return_value.limit.return_value = []
+    conditions = [
+        {"field": "findings.severity", "operator": "equals", "value": "high", "value_type": "categorical"},
+        {"field": "findings.category", "operator": "equals", "value": "Electrical", "value_type": "categorical"},
+    ]
+    with mock.patch.object(repo, "_get_collection", return_value=collection):
+        _, query_ast, mongo_query, _ = asyncio.run(repo.query_nested(conditions, match_type="and", user_id="u1"))
+    assert "$elemMatch" in str(mongo_query)
+    assert query_ast["conditions"] == conditions
+    collection.find.assert_called_once_with({"$and": [{"user_id": "u1"}, mongo_query]})
+
+
+def test_raw_query_depth_is_computed_from_field_paths():
+    from app.api.routes.query import _field_paths
+    query = {"$and": [{"findings": {"$elemMatch": {"severity": "high", "issues.status": "open"}}},
+                      {"dynamic_attributes.electrical_telemetry.phases.phase_a.voltage_kv": {"$gt": 13}}]}
+    paths = _field_paths(query)
+    assert "findings.issues.status" in paths
+    assert max(len(p.split(".")) for p in paths) == 5

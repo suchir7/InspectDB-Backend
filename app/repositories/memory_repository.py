@@ -130,7 +130,7 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
         reports = [r for r in self._reports.values() if user_id is None or r.get("user_id") == user_id]
         total_docs = len(reports)
         
-        # path -> dict(types=set(), count=int, is_array=bool, is_nested=bool, example=val)
+        # path -> dict(types=set(), docs=set of report indexes, is_array=bool, is_nested=bool, example=val)
         discovered: Dict[str, Dict[str, Any]] = {}
 
         def _traverse(obj: Any, current_path: str, is_inside_array: bool = False):
@@ -143,7 +143,7 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
                     if sub_path not in discovered:
                         discovered[sub_path] = {
                             "types": set(),
-                            "count": 0,
+                            "docs": set(),
                             "is_array": is_arr,
                             "is_nested": is_nest or is_inside_array,
                             "example": v if not is_nest else None
@@ -151,7 +151,7 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
                     
                     t_str = self._infer_val_type(v)
                     discovered[sub_path]["types"].add(t_str)
-                    discovered[sub_path]["count"] += 1
+                    discovered[sub_path]["docs"].add(current_doc[0])
                     if not is_nest and discovered[sub_path]["example"] is None:
                         discovered[sub_path]["example"] = v
 
@@ -166,8 +166,10 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
                     if isinstance(item, dict):
                         _traverse(item, current_path, is_inside_array=True)
 
-        for r in reports:
-            # Clean copy to avoid mutating during schema inspection
+        # Count each document once per path, however many array elements carry the field
+        current_doc = [0]
+        for index, r in enumerate(reports):
+            current_doc[0] = index
             _traverse(r, "")
 
         fields: List[SchemaFieldInfo] = []
@@ -179,7 +181,7 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
         for path, info in sorted(discovered.items()):
             is_arr = info["is_array"] or "[]" in path
             is_nest = info["is_nested"] or "." in path
-            is_var = info["count"] < total_docs
+            is_var = len(info["docs"]) < total_docs
 
             if is_nest:
                 nested_count += 1
@@ -207,7 +209,7 @@ class InMemoryInspectionRepository(BaseInspectionRepository):
                 is_array=is_arr,
                 is_nested=is_nest,
                 is_variable_schema=is_var,
-                occurrence_count=info["count"],
+                occurrence_count=len(info["docs"]),
                 total_documents=total_docs,
                 example_value=info["example"] if not isinstance(info["example"], (dict, list)) else None
             ))

@@ -116,3 +116,15 @@ async def test_query_explanation(service):
     assert explanation.uses_elem_match is True
     assert "findings" in explanation.nested_paths[0]
     assert len(explanation.index_recommendations) >= 1
+
+
+def test_schema_counts_each_report_once_for_array_fields(repo):
+    """findings.issues.status appears in several issues per report but must be counted per report."""
+    overview = repo.get_schema_overview()
+    for field in overview.fields:
+        assert field.occurrence_count <= field.total_documents, field.path
+    reports_with_issue_status = sum(
+        1 for r in SAMPLE_REPORTS if any(i.get("status") for f in r["findings"] for i in f.get("issues", []))
+    )
+    issue_status = next(f for f in overview.fields if f.path == "findings.issues.status")
+    assert issue_status.occurrence_count == reports_with_issue_status

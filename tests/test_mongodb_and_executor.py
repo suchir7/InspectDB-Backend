@@ -116,7 +116,7 @@ async def test_5_nested_document_query():
                 "value_type": "number"
             }
         ]
-        results, mongo_filter, ast_obj, exec_ms = await repo.query_nested(conditions, match_type="and")
+        results, ast_obj, mongo_filter, exec_ms = await repo.query_nested(conditions, match_type="and")
         assert len(results) == 1
         assert "dynamic_attributes.electrical_telemetry.phase_delta_t_c" in mongo_filter
 
@@ -141,7 +141,7 @@ async def test_6_array_document_query():
                 "value_type": "string"
             }
         ]
-        results, mongo_filter, _, _ = await repo.query_nested(conditions)
+        results, _, mongo_filter, _ = await repo.query_nested(conditions)
         assert "findings" in mongo_filter
         assert "$elemMatch" in mongo_filter["findings"]
 
@@ -162,7 +162,7 @@ async def test_7_nested_array_elem_match():
             {"field": "findings.issues.status", "operator": "equals", "value": "open", "value_type": "string"},
             {"field": "findings.issues.severity", "operator": "equals", "value": "critical", "value_type": "string"}
         ]
-        results, mongo_filter, _, _ = await repo.query_nested(conditions)
+        results, _, mongo_filter, _ = await repo.query_nested(conditions)
         assert "findings" in mongo_filter
 
 

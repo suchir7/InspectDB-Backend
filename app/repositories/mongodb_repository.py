@@ -289,8 +289,9 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
         results = [self._clean_doc(d) for d in cursor]
         
         exec_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        ast_obj = {"match_type": match_type, "conditions": conditions}
-        return results, mongo_filter, ast_obj, exec_ms
+        ast_obj = {"match_type": match_type, "conditions": conditions, "generated_mongo": mongo_filter}
+        # Same order as the base interface: (results, query_ast, mongo_query, ms)
+        return results, ast_obj, mongo_filter, exec_ms
 
     async def query_raw(
         self,
@@ -432,7 +433,7 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
                     if sub_path not in discovered:
                         discovered[sub_path] = {
                             "types": set(),
-                            "count": 0,
+                            "docs": set(),
                             "is_array": is_arr,
                             "is_nested": is_nest or is_inside_array,
                             "example": v if not is_nest else None
@@ -440,7 +441,7 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
                     
                     t_str = self._infer_val_type(v)
                     discovered[sub_path]["types"].add(t_str)
-                    discovered[sub_path]["count"] += 1
+                    discovered[sub_path]["docs"].add(current_doc[0])
                     if not is_nest and discovered[sub_path]["example"] is None:
                         discovered[sub_path]["example"] = v
 
@@ -455,7 +456,14 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
                     if isinstance(item, dict):
                         _traverse(item, current_path, is_inside_array=True)
 
-        for r in reports:
+        # Count each document once per path, however many array elements carry the field
+
+        current_doc = [0]
+
+        for index, r in enumerate(reports):
+
+            current_doc[0] = index
+
             _traverse(r, "")
 
         fields: List[SchemaFieldInfo] = []
@@ -466,7 +474,7 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
         for path, info in sorted(discovered.items()):
             is_arr = info["is_array"] or "[]" in path
             is_nest = info["is_nested"] or "." in path
-            is_var = info["count"] < total_docs
+            is_var = len(info["docs"]) < len(reports)
 
             if is_nest:
                 nested_count += 1
@@ -493,8 +501,8 @@ class MongoDBInspectionRepository(BaseInspectionRepository):
                 is_array=is_arr,
                 is_nested=is_nest,
                 is_variable_schema=is_var,
-                occurrence_count=info["count"],
-                total_documents=total_docs,
+                occurrence_count=len(info["docs"]),
+                total_documents=len(reports),  # fields are discovered from up to 100 sampled reports
                 example_value=info["example"] if not isinstance(info["example"], (dict, list)) else None
             ))
 
